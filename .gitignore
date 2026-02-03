@@ -1,1 +1,6 @@
 .pio
+dashboard/node_modules/
+dashboard/eyedrops.db
+dashboard/eyedrops.db-shm
+dashboard/eyedrops.db-wal
+dashboard/package-lock.json
