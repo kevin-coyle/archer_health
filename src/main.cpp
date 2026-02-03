@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include "medication.h"
 
 // WiFi credentials
@@ -104,6 +105,10 @@ unsigned long sessionStartTime = 0;
 const unsigned long WAIT_TIME_MS = 5 * 60 * 1000; // 5 minutes
 bool exocinFinished = false;
 
+// Track which sessions are completed today
+bool sessionCompleted[3] = {false, false, false};
+bool lastSyncOk = false;
+
 // Touch regions
 struct TouchRegion {
   int x, y, w, h;
@@ -132,7 +137,13 @@ String makeSessionId() {
 void postEvent(const char* eventType, const char* medName = nullptr,
                const char* medEye = nullptr, int medIdx = -1,
                int medTotal = -1, int elapsedSec = -1) {
-  if (WiFi.status() != WL_CONNECTED) return;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("postEvent skipped (%s): WiFi not connected (status=%d)\n",
+                  eventType, WiFi.status());
+    return;
+  }
+  Serial.printf("postEvent: %s (WiFi OK, IP=%s)\n", eventType,
+                WiFi.localIP().toString().c_str());
 
   HTTPClient http;
   String url = String("http://") + DASHBOARD_HOST + ":" + String(DASHBOARD_PORT) + "/api/events";
@@ -158,6 +169,111 @@ void postEvent(const char* eventType, const char* medName = nullptr,
     Serial.printf("Post failed: %s\n", http.errorToString(code).c_str());
   }
   http.end();
+}
+
+// Check dashboard for an incomplete session to resume
+bool checkResume(int sessionIdx) {
+  // Wait briefly for WiFi if it's still connecting
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Waiting for WiFi before resume check...");
+    for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
+      delay(100);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi not connected, skipping resume check");
+      return false;
+    }
+  }
+
+  HTTPClient http;
+  String url = String("http://") + DASHBOARD_HOST + ":" + String(DASHBOARD_PORT)
+             + "/api/resume?session_name=" + sessions[sessionIdx].name;
+  http.begin(url);
+  http.setConnectTimeout(2000);
+  http.setTimeout(2000);
+
+  int code = http.GET();
+  if (code != 200) {
+    http.end();
+    return false;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) return false;
+
+  bool found = doc["found"] | false;
+  if (!found) return false;
+
+  int resumeIndex = doc["resume_index"] | 0;
+  int medTotal = doc["med_total"] | 0;
+  const char* sid = doc["session_id"];
+
+  if (resumeIndex <= 0 || resumeIndex >= medTotal || !sid) return false;
+
+  currentMedIndex = resumeIndex;
+  currentSessionId = String(sid);
+  sessionStartTime = millis();
+  Serial.printf("Resuming session %s at med %d/%d (id=%s)\n",
+                sessions[sessionIdx].name.c_str(), resumeIndex, medTotal, sid);
+  return true;
+}
+
+// Fetch which sessions are already completed today
+void fetchCompletedSessions() {
+  // Reset all to false
+  for (int i = 0; i < 3; i++) sessionCompleted[i] = false;
+  lastSyncOk = false;
+
+  // Wait briefly for WiFi if still connecting
+  if (WiFi.status() != WL_CONNECTED) {
+    for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
+      delay(100);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("Sync failed: WiFi not connected");
+      return;
+    }
+  }
+
+  HTTPClient http;
+  String url = String("http://") + DASHBOARD_HOST + ":" + String(DASHBOARD_PORT)
+             + "/api/calendar?days=1";
+  http.begin(url);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("Sync failed: HTTP %d\n", code);
+    http.end();
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload)) {
+    Serial.println("Sync failed: JSON parse error");
+    return;
+  }
+
+  lastSyncOk = true;
+
+  // calendar returns an array; today is index 0
+  JsonObject today = doc[0]["sessions"];
+  if (today.isNull()) return;
+
+  for (int i = 0; i < sessions.size() && i < 3; i++) {
+    JsonObject sess = today[sessions[i].name];
+    if (!sess.isNull() && sess["status"] == "complete") {
+      sessionCompleted[i] = true;
+      Serial.printf("Session %s already completed today\n", sessions[i].name.c_str());
+    }
+  }
 }
 
 void initWiFi() {
@@ -201,6 +317,8 @@ void setup()
 }
 
 void drawSessionSelect() {
+  fetchCompletedSessions();
+
   tft.fillScreen(TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
@@ -208,10 +326,24 @@ void drawSessionSelect() {
 
   // Draw session buttons (centered for circular display)
   for (int i = 0; i < sessions.size(); i++) {
-    tft.fillRoundRect(btnSession[i].x, btnSession[i].y, btnSession[i].w, btnSession[i].h, 8, TFT_DARKGREY);
-    tft.setTextSize(2);
-    tft.setTextDatum(middle_center);
-    tft.drawString(sessions[i].name, 120, btnSession[i].y + 18);
+    if (sessionCompleted[i]) {
+      // Completed: dim button with checkmark
+      tft.fillRoundRect(btnSession[i].x, btnSession[i].y, btnSession[i].w, btnSession[i].h, 8, 0x2104); // very dark grey
+      tft.setTextColor(0x6B6D); // mid grey text
+      tft.setTextSize(2);
+      tft.setTextDatum(middle_center);
+      tft.drawString(sessions[i].name, 110, btnSession[i].y + 18);
+      // Draw checkmark
+      tft.setTextColor(TFT_GREEN);
+      tft.setTextSize(2);
+      tft.drawString("ok", 180, btnSession[i].y + 18);
+      tft.setTextColor(TFT_WHITE); // reset
+    } else {
+      tft.fillRoundRect(btnSession[i].x, btnSession[i].y, btnSession[i].w, btnSession[i].h, 8, TFT_DARKGREY);
+      tft.setTextSize(2);
+      tft.setTextDatum(middle_center);
+      tft.drawString(sessions[i].name, 120, btnSession[i].y + 18);
+    }
   }
 
   // Draw settings button (bottom center, within circular safe area)
@@ -220,9 +352,16 @@ void drawSessionSelect() {
   tft.setTextDatum(middle_center);
   tft.drawString("SET", 120, btnSettings.y + 14);
 
-  // WiFi status indicator (small dot, top-left safe area)
-  uint32_t wifiColor = (WiFi.status() == WL_CONNECTED) ? TFT_GREEN : TFT_RED;
-  tft.fillCircle(50, 50, 5, wifiColor);
+  // Sync status indicator
+  if (!lastSyncOk) {
+    tft.setTextSize(1);
+    tft.setTextDatum(middle_center);
+    tft.setTextColor(TFT_RED);
+    tft.drawString("NOT SYNCED", 120, 68);
+    tft.setTextColor(TFT_WHITE);
+  } else {
+    tft.fillCircle(50, 50, 5, TFT_GREEN);
+  }
 }
 
 void drawMedication() {
@@ -436,14 +575,27 @@ void handleTouch(int x, int y) {
       // Check session buttons
       for (int i = 0; i < sessions.size(); i++) {
         if (btnSession[i].contains(x, y)) {
+          if (sessionCompleted[i]) {
+            Serial.printf("Session %s already completed, ignoring tap\n", sessions[i].name.c_str());
+            return;
+          }
           selectedSession = i;
           currentMedIndex = 0;
           sessionStartTime = millis();
-          currentSessionId = makeSessionId();
+
+          bool resumed = checkResume(i);
+          if (!resumed) {
+            currentSessionId = makeSessionId();
+            postEvent("session_start", nullptr, nullptr, -1,
+                      sessions[i].medications.size());
+          } else {
+            postEvent("session_resumed", nullptr, nullptr, currentMedIndex,
+                      sessions[i].medications.size());
+          }
+
           currentState = MEDICATION_DISPLAY;
-          Serial.printf("Selected session: %s\n", sessions[i].name.c_str());
-          postEvent("session_start", nullptr, nullptr, -1,
-                    sessions[i].medications.size());
+          Serial.printf("Selected session: %s (resumed=%d)\n",
+                        sessions[i].name.c_str(), resumed);
           return;
         }
       }

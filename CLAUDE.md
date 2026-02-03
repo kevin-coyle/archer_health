@@ -35,7 +35,8 @@ SESSION_SELECT → MEDICATION_DISPLAY → TIMER_COUNTDOWN → SESSION_COMPLETE �
 ### Key Components
 1. **medication.cpp/h**: Data structures for medications and sessions
 2. **main.cpp**: Display init, UI rendering, state machine, touch handling
-3. **Preferences (NVS)**: Stores Exocin finished flag
+3. **dashboard/server.js**: Node.js dashboard with calendar view, session clearing, and resume API
+4. **Preferences (NVS)**: Stores Exocin finished flag
 
 ### Medication Data Structure
 ```cpp
@@ -121,6 +122,41 @@ struct Medication {
 - **Flicker prevention**: Static elements drawn once, only dynamic content updated
 - **Timer updates**: Only redraws when seconds change
 
+## Dashboard
+
+### Running
+```bash
+cd ~/dog_eyedrop_timer/dashboard
+node server.js
+# Runs at http://localhost:3000
+```
+
+### API Endpoints
+- `POST /api/events` - ESP32 posts session events (session_start, med_done, timer_skipped, session_complete, session_resumed)
+- `GET /api/sessions?limit=N` - List recent sessions with events
+- `GET /api/calendar?days=N` - Per-day summary for calendar view
+- `GET /api/resume?session_name=Morning` - Check for incomplete session to resume
+- `DELETE /api/session/:session_id` - Clear a session (allows re-logging on device)
+
+### Features
+- Calendar view with 14-day history
+- Click rows to expand and see individual events
+- Clear button per session to remove and allow re-logging
+- Auto-refreshes every 30 seconds
+
+### Database
+- SQLite via better-sqlite3, stored at `dashboard/eyedrops.db`
+- Single `events` table with session_id grouping
+
+## ESP32-Dashboard Sync
+- ESP32 connects to WiFi on boot (non-blocking)
+- On session select screen, fetches completed sessions from dashboard calendar API
+- Completed sessions shown as dimmed buttons with "ok" label, taps ignored
+- "NOT SYNCED" warning shown in red if dashboard unreachable
+- Green dot shown if sync succeeded
+- WiFi wait: up to 3 seconds before resume check and sync to allow connection to establish
+- Session resume: on session select, queries `/api/resume` to continue incomplete sessions after power cycle
+
 ## Build & Deploy
 ```bash
 cd ~/dog_eyedrop_timer
@@ -133,10 +169,9 @@ pio run --target upload
 - Setting persists in NVS across power cycles
 
 ## Future Enhancements
-- [ ] WiFi + NTP for time-based session suggestions
+- [ ] NTP for time-based session suggestions
 - [ ] Low power mode with screen timeout
 - [ ] Battery support
-- [ ] Historical tracking (log drop times)
 - [ ] Alarm/reminder notifications
 
 ## Modifying Schedule
@@ -147,11 +182,20 @@ To change medications:
 4. Rebuild and deploy
 
 ## Known Issues
-None currently.
+- Session IDs are `millis()` values that reset on reboot; calendar API uses `last_event_at` timestamps (not session_id) for determining most recent session per day
 
 ## Dependencies
+
+### ESP32
 - LovyanGFX @^1.1.0 (display + touch)
+- ArduinoJson @^7.0.0 (JSON parsing for dashboard API)
+- HTTPClient (built-in, HTTP requests to dashboard)
+- WiFi (built-in)
 - Preferences @2.0.0 (NVS storage, built-in)
+
+### Dashboard (Node.js)
+- express (web server)
+- better-sqlite3 (database)
 
 ## Notes
 - Touch coordinates: 0,0 = top-left, 239,239 = bottom-right
