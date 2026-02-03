@@ -1,7 +1,18 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <Preferences.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include "medication.h"
+
+// WiFi credentials
+const char* WIFI_SSID = "electrosoft";
+const char* WIFI_PASS = "beagleboat87!";
+
+// Dashboard server
+const char* DASHBOARD_HOST = "192.168.6.59";
+const int DASHBOARD_PORT = 3000;
+String currentSessionId = "";
 
 // Display configuration for ESP32-2424S012
 class LGFX : public lgfx::LGFX_Device
@@ -110,6 +121,52 @@ TouchRegion btnSession[3] = {
 TouchRegion btnSettings = {90, 200, 60, 28};
 TouchRegion btnSkip = {70, 150, 100, 32};
 
+// Generate a simple session ID from millis
+String makeSessionId() {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%lu", millis());
+  return String(buf);
+}
+
+// Fire-and-forget POST to dashboard
+void postEvent(const char* eventType, const char* medName = nullptr,
+               const char* medEye = nullptr, int medIdx = -1,
+               int medTotal = -1, int elapsedSec = -1) {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+  String url = String("http://") + DASHBOARD_HOST + ":" + String(DASHBOARD_PORT) + "/api/events";
+  http.begin(url);
+  http.setConnectTimeout(2000);
+  http.setTimeout(2000);
+  http.addHeader("Content-Type", "application/json");
+
+  String json = "{\"event_type\":\"" + String(eventType) + "\"";
+  json += ",\"session_name\":\"" + sessions[selectedSession].name + "\"";
+  json += ",\"session_id\":\"" + currentSessionId + "\"";
+  if (medName) json += ",\"medication_name\":\"" + String(medName) + "\"";
+  if (medEye) json += ",\"medication_eye\":\"" + String(medEye) + "\"";
+  if (medIdx >= 0) json += ",\"med_index\":" + String(medIdx);
+  if (medTotal >= 0) json += ",\"med_total\":" + String(medTotal);
+  if (elapsedSec >= 0) json += ",\"elapsed_sec\":" + String(elapsedSec);
+  json += "}";
+
+  int code = http.POST(json);
+  if (code > 0) {
+    Serial.printf("Event posted: %s (%d)\n", eventType, code);
+  } else {
+    Serial.printf("Post failed: %s\n", http.errorToString(code).c_str());
+  }
+  http.end();
+}
+
+void initWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.println("WiFi connecting...");
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -137,6 +194,9 @@ void setup()
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);
 
+    // Initialize WiFi (non-blocking)
+    initWiFi();
+
     Serial.println("Setup complete!");
 }
 
@@ -159,6 +219,10 @@ void drawSessionSelect() {
   tft.setTextSize(1);
   tft.setTextDatum(middle_center);
   tft.drawString("SET", 120, btnSettings.y + 14);
+
+  // WiFi status indicator (small dot, top-left safe area)
+  uint32_t wifiColor = (WiFi.status() == WL_CONNECTED) ? TFT_GREEN : TFT_RED;
+  tft.fillCircle(50, 50, 5, wifiColor);
 }
 
 void drawMedication() {
@@ -375,8 +439,11 @@ void handleTouch(int x, int y) {
           selectedSession = i;
           currentMedIndex = 0;
           sessionStartTime = millis();
+          currentSessionId = makeSessionId();
           currentState = MEDICATION_DISPLAY;
           Serial.printf("Selected session: %s\n", sessions[i].name.c_str());
+          postEvent("session_start", nullptr, nullptr, -1,
+                    sessions[i].medications.size());
           return;
         }
       }
@@ -401,7 +468,10 @@ void handleTouch(int x, int y) {
     case MEDICATION_DISPLAY:
       if (btnDone.contains(x, y)) {
         Medication& med = sessions[selectedSession].medications[currentMedIndex];
-        
+        int total = sessions[selectedSession].medications.size();
+        postEvent("med_done", med.short_name.c_str(), eyeToString(med.eye),
+                  currentMedIndex, total);
+
         // Check if we need to wait (same eye)
         if (currentMedIndex + 1 < sessions[selectedSession].medications.size()) {
           Medication& nextMed = sessions[selectedSession].medications[currentMedIndex + 1];
@@ -420,6 +490,8 @@ void handleTouch(int x, int y) {
           // Last medication
           currentMedIndex++;
           currentState = SESSION_COMPLETE;
+          int elapsed = (millis() - sessionStartTime) / 1000;
+          postEvent("session_complete", nullptr, nullptr, -1, total, elapsed);
         }
       }
       break;
@@ -427,6 +499,7 @@ void handleTouch(int x, int y) {
     case TIMER_COUNTDOWN:
       if (btnSkip.contains(x, y)) {
         Serial.println("Timer skipped by user");
+        postEvent("timer_skipped");
         resetTimerState();
         currentMedIndex++;
         currentState = MEDICATION_DISPLAY;
@@ -474,6 +547,6 @@ void loop()
     handleTouch(x, y);
     delay(200);  // Debounce
   }
-  
+
   delay(50);
 }

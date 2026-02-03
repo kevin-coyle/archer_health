@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+  Install to /etc/avahi/services/eyedrops.service
+  sudo cp avahi/eyedrops.service /etc/avahi/services/
+  The ESP32 resolves "eyedrops.local" via mDNS to find this machine.
+-->
+<service-group>
+  <name>Eyedrop Dashboard</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>3000</port>
+    <host-name>eyedrops.local</host-name>
+  </service>
+</service-group>
