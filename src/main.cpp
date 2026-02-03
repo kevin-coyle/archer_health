@@ -101,13 +101,14 @@ struct TouchRegion {
   }
 };
 
-TouchRegion btnDone = {40, 170, 160, 45};
+TouchRegion btnDone = {45, 170, 150, 40};
 TouchRegion btnSession[3] = {
-  {30, 70, 180, 40},
-  {30, 120, 180, 40},
-  {30, 170, 180, 40}
+  {45, 80, 150, 36},
+  {45, 120, 150, 36},
+  {45, 160, 150, 36}
 };
-TouchRegion btnSettings = {165, 15, 50, 30};
+TouchRegion btnSettings = {90, 200, 60, 28};
+TouchRegion btnSkip = {70, 150, 100, 32};
 
 void setup()
 {
@@ -143,21 +144,21 @@ void drawSessionSelect() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
-  tft.drawString("SELECT SESSION", 120, 30);
-  
+  tft.drawString("SELECT SESSION", 120, 50);
+
   // Draw session buttons (centered for circular display)
   for (int i = 0; i < sessions.size(); i++) {
     tft.fillRoundRect(btnSession[i].x, btnSession[i].y, btnSession[i].w, btnSession[i].h, 8, TFT_DARKGREY);
     tft.setTextSize(2);
     tft.setTextDatum(middle_center);
-    tft.drawString(sessions[i].name, 120, btnSession[i].y + 20);
+    tft.drawString(sessions[i].name, 120, btnSession[i].y + 18);
   }
-  
-  // Draw settings button (gear icon represented as "SET")
-  tft.fillRoundRect(btnSettings.x, btnSettings.y, btnSettings.w, btnSettings.h, 3, TFT_BLUE);
+
+  // Draw settings button (bottom center, within circular safe area)
+  tft.fillRoundRect(btnSettings.x, btnSettings.y, btnSettings.w, btnSettings.h, 5, TFT_BLUE);
   tft.setTextSize(1);
   tft.setTextDatum(middle_center);
-  tft.drawString("SET", btnSettings.x + 25, btnSettings.y + 15);
+  tft.drawString("SET", 120, btnSettings.y + 14);
 }
 
 void drawMedication() {
@@ -165,49 +166,47 @@ void drawMedication() {
     currentState = SESSION_COMPLETE;
     return;
   }
-  
+
   Medication& med = sessions[selectedSession].medications[currentMedIndex];
-  
+
   tft.fillScreen(TFT_BLACK);
-  
-  // Progress indicator
+
+  // Progress indicator (pulled inward for circular display)
   tft.setTextSize(1);
   tft.setTextDatum(top_right);
   char progress[20];
-  snprintf(progress, sizeof(progress), "%d/%d", currentMedIndex + 1, 
+  snprintf(progress, sizeof(progress), "%d/%d", currentMedIndex + 1,
            sessions[selectedSession].medications.size());
-  tft.drawString(progress, 210, 15);
-  
+  tft.drawString(progress, 190, 40);
+
   // Medication name
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
-  tft.drawString(med.short_name, 120, 50);
-  
-  // Eye indicator with visual distinction
+  tft.drawString(med.short_name, 120, 55);
+
+  // Eye indicator with visual distinction (inset from edges for circle)
   tft.setTextSize(3);
+  tft.setTextDatum(middle_center);
   if (med.eye == LEFT) {
-    tft.fillRect(0, 70, 120, 60, TFT_DARKGREEN);
+    tft.fillRoundRect(20, 75, 100, 50, 8, TFT_DARKGREEN);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextDatum(middle_center);
-    tft.drawString("LEFT", 60, 100);
+    tft.drawString("LEFT", 70, 100);
     tft.setTextColor(TFT_DARKGREY);
-    tft.drawString("RIGHT", 180, 100);
+    tft.drawString("RIGHT", 170, 100);
   } else if (med.eye == RIGHT) {
-    tft.fillRect(120, 70, 120, 60, TFT_DARKGREEN);
+    tft.fillRoundRect(120, 75, 100, 50, 8, TFT_DARKGREEN);
     tft.setTextColor(TFT_DARKGREY);
-    tft.setTextDatum(middle_center);
-    tft.drawString("LEFT", 60, 100);
+    tft.drawString("LEFT", 70, 100);
     tft.setTextColor(TFT_WHITE);
-    tft.drawString("RIGHT", 180, 100);
+    tft.drawString("RIGHT", 170, 100);
   } else { // BOTH
-    tft.fillRect(0, 70, 240, 60, TFT_DARKGREEN);
+    tft.fillRoundRect(20, 75, 200, 50, 8, TFT_DARKGREEN);
     tft.setTextColor(TFT_WHITE);
-    tft.setTextDatum(middle_center);
-    tft.drawString("BOTH EYES", 120, 100);
+    tft.drawString("BOTH", 120, 100);
   }
-  
+
   tft.setTextColor(TFT_WHITE);
-  
+
   // Shake warning if needed
   if (med.shake_required) {
     tft.setTextSize(2);
@@ -216,20 +215,27 @@ void drawMedication() {
     tft.drawString("! SHAKE FIRST !", 120, 145);
     tft.setTextColor(TFT_WHITE);
   }
-  
+
   // Done button
   tft.fillRoundRect(btnDone.x, btnDone.y, btnDone.w, btnDone.h, 8, TFT_GREEN);
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
   tft.setTextColor(TFT_BLACK);
-  tft.drawString("TAP DONE", 120, 185);
+  tft.drawString("TAP DONE", 120, 190);
   tft.setTextColor(TFT_WHITE);
 }
 
+int timerLastSeconds = -1;
+int timerLastProgress = -1;
+bool timerScreenDrawn = false;
+
+void resetTimerState() {
+  timerScreenDrawn = false;
+  timerLastSeconds = -1;
+  timerLastProgress = -1;
+}
+
 void drawTimer() {
-  static int lastSeconds = -1;
-  static int lastProgress = -1;
-  static bool timerScreenDrawn = false;
   
   unsigned long elapsed = millis() - waitTimerStart;
   unsigned long remaining = WAIT_TIME_MS - elapsed;
@@ -245,74 +251,79 @@ void drawTimer() {
     
     currentMedIndex++;
     currentState = MEDICATION_DISPLAY;
-    timerScreenDrawn = false;
-    lastSeconds = -1;
-    lastProgress = -1;
+    resetTimerState();
     return;
   }
   
   // Draw static elements only once
   if (!timerScreenDrawn) {
     tft.fillScreen(TFT_BLACK);
-    
+
     // Header
     tft.setTextSize(2);
     tft.setTextDatum(middle_center);
-    tft.drawString("WAIT - SAME EYE", 120, 30);
-    
-    // Progress bar background
-    tft.fillRect(20, 120, 200, 20, TFT_DARKGREY);
-    
+    tft.drawString("WAIT - SAME EYE", 120, 45);
+
+    // Progress bar background (inset for circular display)
+    tft.fillRoundRect(35, 120, 170, 16, 4, TFT_DARKGREY);
+
+    // Skip button
+    tft.fillRoundRect(btnSkip.x, btnSkip.y, btnSkip.w, btnSkip.h, 8, TFT_ORANGE);
+    tft.setTextSize(2);
+    tft.setTextDatum(middle_center);
+    tft.setTextColor(TFT_BLACK);
+    tft.drawString("SKIP", 120, 166);
+    tft.setTextColor(TFT_WHITE);
+
     // Next medication preview
     if (currentMedIndex + 1 < sessions[selectedSession].medications.size()) {
       Medication& nextMed = sessions[selectedSession].medications[currentMedIndex + 1];
       tft.setTextSize(1);
       tft.setTextDatum(middle_center);
-      tft.drawString("Next:", 120, 160);
+      tft.drawString("Next:", 120, 192);
       tft.setTextSize(2);
-      tft.drawString(nextMed.short_name, 120, 180);
-      tft.drawString(eyeToString(nextMed.eye), 120, 205);
+      tft.drawString(nextMed.short_name, 120, 208);
     }
-    
+
     timerScreenDrawn = true;
   }
-  
+
   // Update countdown only when seconds change
   int seconds = (remaining % 60000) / 1000;
-  if (seconds != lastSeconds) {
+  if (seconds != timerLastSeconds) {
     int minutes = remaining / 60000;
     char timeStr[10];
     snprintf(timeStr, sizeof(timeStr), "%d:%02d", minutes, seconds);
-    
+
     // Clear previous time (draw black rectangle)
-    tft.fillRect(60, 60, 120, 40, TFT_BLACK);
-    
+    tft.fillRect(60, 62, 120, 40, TFT_BLACK);
+
     // Draw new time
     tft.setTextSize(4);
     tft.setTextDatum(middle_center);
     tft.setTextColor(TFT_WHITE);
-    tft.drawString(timeStr, 120, 80);
-    
-    lastSeconds = seconds;
+    tft.drawString(timeStr, 120, 82);
+
+    timerLastSeconds = seconds;
   }
-  
-  // Update progress bar
-  int progress = ((float)elapsed / WAIT_TIME_MS) * 200;
-  if (progress != lastProgress) {
-    tft.fillRect(20, 120, progress, 20, TFT_GREEN);
-    lastProgress = progress;
+
+  // Update progress bar (matching inset background)
+  int progress = ((float)elapsed / WAIT_TIME_MS) * 170;
+  if (progress != timerLastProgress) {
+    tft.fillRoundRect(35, 120, progress, 16, 4, TFT_GREEN);
+    timerLastProgress = progress;
   }
 }
 
 void drawComplete() {
   tft.fillScreen(TFT_BLACK);
-  
+
   tft.setTextSize(3);
   tft.setTextDatum(middle_center);
   tft.setTextColor(TFT_GREEN);
-  tft.drawString("SESSION", 120, 80);
-  tft.drawString("COMPLETE", 120, 115);
-  
+  tft.drawString("SESSION", 120, 85);
+  tft.drawString("COMPLETE", 120, 120);
+
   // Show elapsed time
   unsigned long elapsed = (millis() - sessionStartTime) / 1000;
   int minutes = elapsed / 60;
@@ -321,36 +332,36 @@ void drawComplete() {
   snprintf(timeStr, sizeof(timeStr), "%d min %d sec", minutes, seconds);
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE);
-  tft.drawString(timeStr, 120, 160);
-  
+  tft.drawString(timeStr, 120, 158);
+
   // Tap to return
   tft.setTextSize(1);
-  tft.drawString("Tap to return", 120, 200);
+  tft.drawString("Tap to return", 120, 190);
 }
 
 void drawSettingsMenu() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
-  tft.drawString("SETTINGS", 120, 30);
-  
+  tft.drawString("SETTINGS", 120, 50);
+
   // Exocin toggle
   tft.setTextSize(1);
-  tft.setTextDatum(top_left);
-  tft.drawString("Exocin course:", 20, 60);
-  
-  tft.fillRoundRect(20, 80, 200, 40, 5, exocinFinished ? TFT_GREEN : TFT_RED);
+  tft.setTextDatum(middle_center);
+  tft.drawString("Exocin course:", 120, 80);
+
+  tft.fillRoundRect(40, 95, 160, 40, 8, exocinFinished ? TFT_GREEN : TFT_RED);
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
   tft.setTextColor(TFT_BLACK);
-  tft.drawString(exocinFinished ? "FINISHED" : "ACTIVE", 120, 100);
+  tft.drawString(exocinFinished ? "FINISHED" : "ACTIVE", 120, 115);
   tft.setTextColor(TFT_WHITE);
-  
+
   // Back button
-  tft.fillRoundRect(20, 180, 200, 40, 5, TFT_DARKGREY);
+  tft.fillRoundRect(55, 165, 130, 36, 8, TFT_DARKGREY);
   tft.setTextSize(2);
   tft.setTextDatum(middle_center);
-  tft.drawString("BACK", 120, 200);
+  tft.drawString("BACK", 120, 183);
 }
 
 void handleTouch(int x, int y) {
@@ -377,7 +388,7 @@ void handleTouch(int x, int y) {
         while (!tft.getTouch(&x, &y)) delay(10);
         
         // Toggle Exocin if tapped on toggle button
-        if (y >= 80 && y <= 120) {
+        if (y >= 95 && y <= 135) {
           exocinFinished = !exocinFinished;
           prefs.putBool("exocin_done", exocinFinished);
           sessions = getSessions(exocinFinished);
@@ -414,7 +425,12 @@ void handleTouch(int x, int y) {
       break;
       
     case TIMER_COUNTDOWN:
-      // No touch action during timer
+      if (btnSkip.contains(x, y)) {
+        Serial.println("Timer skipped by user");
+        resetTimerState();
+        currentMedIndex++;
+        currentState = MEDICATION_DISPLAY;
+      }
       break;
       
     case SESSION_COMPLETE:
