@@ -17,23 +17,26 @@ function parseLibreCSV(csvPath) {
   const content = fs.readFileSync(csvPath, 'utf-8');
   const lines = content.split('\n');
   
-  // LibreView CSVs typically have 2 header rows, then data
-  // Format: "Device Timestamp","Record Type","Historic Glucose mmol/L","Scan Glucose mmol/L","Rapid-Acting Insulin (units)","Food","Notes"
-  // We want: timestamp, glucose value, trend (if available)
+  // LibreView CSV format:
+  // Device,Serial Number,Device Timestamp,Record Type,Historic Glucose mmol/L,...
+  // Column 0: Device (FreeStyle Libre)
+  // Column 2: Device Timestamp
+  // Column 3: Record Type (0=historic, 1=scan)
+  // Column 4: Historic Glucose mmol/L
   
-  const dataLines = lines.slice(2).filter(line => line.trim().length > 0);
+  const dataLines = lines.slice(1).filter(line => line.trim().length > 0); // Skip 1 header row
   const readings = [];
   
   for (const line of dataLines) {
     // Simple CSV parser (doesn't handle quoted commas - upgrade if needed)
     const fields = line.split(',').map(f => f.replace(/^"|"$/g, '').trim());
     
-    if (fields.length < 3) continue;
+    if (fields.length < 5) continue;
     
-    const timestamp = fields[0]; // "Device Timestamp"
-    const recordType = fields[1]; // "Record Type" (0=historic, 1=scan)
-    const historicGlucose = fields[2]; // "Historic Glucose mmol/L"
-    const scanGlucose = fields[3]; // "Scan Glucose mmol/L"
+    const timestamp = fields[2]; // "Device Timestamp" (column 2)
+    const recordType = fields[3]; // "Record Type" (column 3)
+    const historicGlucose = fields[4]; // "Historic Glucose mmol/L" (column 4)
+    const scanGlucose = fields[5]; // "Scan Glucose mmol/L" (column 5)
     
     // Use historic if available, otherwise scan
     const glucose = historicGlucose || scanGlucose;
