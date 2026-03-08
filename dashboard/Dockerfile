@@ -6,6 +6,9 @@ COPY package.json package-lock.json* ./
 RUN npm install --production
 
 COPY server.js ./
+COPY scripts ./scripts
+COPY migrations ./migrations
+COPY routes ./routes
 
 EXPOSE 3000
 

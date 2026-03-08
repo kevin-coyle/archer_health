@@ -1,6 +1,8 @@
 const express = require('express');
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
+require('dotenv').config();
 
 const app = express();
 const PORT = 3000;
@@ -9,6 +11,14 @@ const PORT = 3000;
 const dbPath = process.env.DB_PATH || path.join(__dirname, 'eyedrops.db');
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
+
+// Run glucose tables migration if it exists
+const glucoseMigrationPath = path.join(__dirname, 'migrations/add-glucose-tables.sql');
+if (fs.existsSync(glucoseMigrationPath)) {
+  console.log('Running glucose tables migration...');
+  const migration = fs.readFileSync(glucoseMigrationPath, 'utf-8');
+  db.exec(migration);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS events (
@@ -26,6 +36,10 @@ db.exec(`
 `);
 
 app.use(express.json());
+
+// Mount glucose monitoring routes
+const glucoseRoutes = require('./routes/glucose');
+app.use('/api/glucose', glucoseRoutes(db));
 
 // POST /api/events - ESP32 posts events here
 const insertStmt = db.prepare(`
