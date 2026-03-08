@@ -11,7 +11,7 @@ const char* WIFI_SSID = "electrosoft";
 const char* WIFI_PASS = "beagleboat87!";
 
 // Dashboard server
-const char* DASHBOARD_HOST = "192.168.6.59";
+const char* DASHBOARD_HOST = "192.168.1.184";
 const int DASHBOARD_PORT = 3000;
 String currentSessionId = "";
 
@@ -441,9 +441,8 @@ void resetTimerState() {
 void drawTimer() {
   
   unsigned long elapsed = millis() - waitTimerStart;
-  unsigned long remaining = WAIT_TIME_MS - elapsed;
-  
-  if (remaining <= 0) {
+
+  if (elapsed >= WAIT_TIME_MS) {
     // Timer complete - flash screen and move to next
     tft.fillScreen(TFT_WHITE);
     delay(100);
@@ -492,6 +491,7 @@ void drawTimer() {
   }
 
   // Update countdown only when seconds change
+  unsigned long remaining = WAIT_TIME_MS - elapsed;
   int seconds = (remaining % 60000) / 1000;
   if (seconds != timerLastSeconds) {
     int minutes = remaining / 60000;
@@ -624,11 +624,15 @@ void handleTouch(int x, int y) {
         postEvent("med_done", med.short_name.c_str(), eyeToString(med.eye),
                   currentMedIndex, total);
 
-        // Check if we need to wait (same eye)
+        // Check if we need to wait (overlapping eyes)
         if (currentMedIndex + 1 < sessions[selectedSession].medications.size()) {
           Medication& nextMed = sessions[selectedSession].medications[currentMedIndex + 1];
-          
-          if (med.wait_after && med.eye == nextMed.eye) {
+
+          // Eyes overlap if either is BOTH, or they're the same
+          bool eyesOverlap = (med.eye == nextMed.eye ||
+                              med.eye == BOTH || nextMed.eye == BOTH);
+
+          if (med.wait_after && eyesOverlap) {
             // Start timer
             waitTimerStart = millis();
             currentState = TIMER_COUNTDOWN;
@@ -636,6 +640,7 @@ void handleTouch(int x, int y) {
           } else {
             // Move to next immediately
             currentMedIndex++;
+            drawMedication();
             Serial.println("Moving to next medication (different eye)");
           }
         } else {
@@ -688,6 +693,18 @@ void loop()
     lastState = currentState;
   }
   
+  // Re-sync completed sessions every 5 minutes while on session select
+  if (currentState == SESSION_SELECT) {
+    static unsigned long lastResync = 0;
+    unsigned long now = millis();
+    if (now - lastResync > 300000) {  // 5 minutes
+      lastResync = now;
+      fetchCompletedSessions();
+      drawSessionSelect();
+      lastState = SESSION_SELECT;  // prevent double draw
+    }
+  }
+
   // Update timer display continuously
   if (currentState == TIMER_COUNTDOWN) {
     drawTimer();

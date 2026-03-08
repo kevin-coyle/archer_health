@@ -6,7 +6,8 @@ const app = express();
 const PORT = 3000;
 
 // SQLite setup
-const db = new Database(path.join(__dirname, 'eyedrops.db'));
+const dbPath = process.env.DB_PATH || path.join(__dirname, 'eyedrops.db');
+const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
 db.exec(`
@@ -121,6 +122,10 @@ app.get('/api/calendar', (req, res) => {
         };
       }
     }
+
+    // Always include today so the ESP32 doesn't mistake yesterday for today
+    const today = new Date().toISOString().slice(0, 10);
+    if (!byDate[today]) byDate[today] = {};
 
     const result = Object.keys(byDate).sort().reverse().map(date => ({
       date,
@@ -416,6 +421,6 @@ setInterval(load, 30000);
 </body>
 </html>`;
 
-app.listen(PORT, () => {
-  console.log('Eyedrop dashboard running at http://localhost:' + PORT);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('Eyedrop dashboard running at http://0.0.0.0:' + PORT);
 });
