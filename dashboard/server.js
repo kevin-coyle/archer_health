@@ -242,6 +242,50 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   }
   h1 { color: #e94560; margin-bottom: 4px; font-size: 1.5em; }
   .subtitle { color: #666; margin-bottom: 20px; font-size: 0.9em; }
+  h2 { color: #4ecca3; margin-top: 30px; margin-bottom: 10px; font-size: 1.2em; }
+  
+  .glucose-widget {
+    background: #16213e;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+    border: 1px solid #0f3460;
+  }
+  .glucose-current {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .glucose-value {
+    font-size: 2.5em;
+    font-weight: bold;
+    color: #4ecca3;
+  }
+  .glucose-value.high { color: #e94560; }
+  .glucose-value.low { color: #ff9800; }
+  .glucose-unit { font-size: 1em; color: #888; }
+  .glucose-time { font-size: 0.9em; color: #666; }
+  .glucose-chart {
+    height: 120px;
+    background: #0f3460;
+    border-radius: 4px;
+    margin-top: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+  .glucose-chart canvas {
+    width: 100%;
+    height: 100%;
+  }
+  .glucose-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 0.85em;
+    margin-top: 12px;
+    color: #999;
+  }
+  .glucose-stat span { color: #4ecca3; font-weight: bold; }
   .refresh-bar {
     display: flex;
     justify-content: space-between;
@@ -330,7 +374,27 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>Eyedrop Timer</h1>
+<h1>Archer Health Dashboard</h1>
+
+<div class="glucose-widget">
+  <h2>Glucose Monitor</h2>
+  <div class="glucose-current">
+    <div class="glucose-value" id="glucose-value">--</div>
+    <div class="glucose-unit">mmol/L</div>
+    <div class="glucose-time" id="glucose-time"></div>
+  </div>
+  <div class="glucose-chart">
+    <canvas id="glucose-chart"></canvas>
+  </div>
+  <div class="glucose-stats">
+    <div>Avg: <span id="glucose-avg">--</span></div>
+    <div>Min: <span id="glucose-min">--</span></div>
+    <div>Max: <span id="glucose-max">--</span></div>
+    <div>Readings: <span id="glucose-count">--</span></div>
+  </div>
+</div>
+
+<h2>Eyedrop Timer</h2>
 <p class="subtitle">Medication calendar</p>
 <div class="refresh-bar">
   <span class="auto-label">Auto-refreshes every 30s</span>
@@ -344,18 +408,110 @@ let sessionsCache = {};
 
 async function load() {
   try {
-    const [calRes, sesRes] = await Promise.all([
+    const [calRes, sesRes, glucoseRes] = await Promise.all([
       fetch('/api/calendar?days=14'),
-      fetch('/api/sessions?limit=60')
+      fetch('/api/sessions?limit=60'),
+      fetch('/api/glucose/recent?hours=6')
     ]);
     calendarData = await calRes.json();
     const sesArr = await sesRes.json();
     sessionsCache = {};
     for (const s of sesArr) sessionsCache[s.session_id] = s;
+    
+    const glucoseData = await glucoseRes.json();
+    updateGlucose(glucoseData);
+    
     render();
   } catch (err) {
     console.error('Load error:', err);
   }
+}
+
+function updateGlucose(data) {
+  const readings = data.readings || [];
+  if (readings.length === 0) {
+    document.getElementById('glucose-value').textContent = '--';
+    document.getElementById('glucose-time').textContent = 'No data';
+    return;
+  }
+  
+  // Latest reading
+  const latest = readings[0];
+  const glucoseVal = latest.libre_reading + (latest.alphatrak_reading || 0);
+  const valueEl = document.getElementById('glucose-value');
+  valueEl.textContent = glucoseVal.toFixed(1);
+  
+  // Color coding: < 6 = low (orange), 6-12 = normal (green), > 12 = high (red)
+  valueEl.className = 'glucose-value';
+  if (glucoseVal < 6) valueEl.classList.add('low');
+  else if (glucoseVal > 12) valueEl.classList.add('high');
+  
+  const timeAgo = new Date(latest.timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  document.getElementById('glucose-time').textContent = timeAgo;
+  
+  // Stats
+  const values = readings.map(r => r.libre_reading + (r.alphatrak_reading || 0));
+  const avg = (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1);
+  const min = Math.min(...values).toFixed(1);
+  const max = Math.max(...values).toFixed(1);
+  
+  document.getElementById('glucose-avg').textContent = avg;
+  document.getElementById('glucose-min').textContent = min;
+  document.getElementById('glucose-max').textContent = max;
+  document.getElementById('glucose-count').textContent = readings.length;
+  
+  // Simple chart
+  renderGlucoseChart(readings);
+}
+
+function renderGlucoseChart(readings) {
+  const canvas = document.getElementById('glucose-chart');
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+  
+  if (readings.length === 0) return;
+  
+  const values = readings.map(r => r.libre_reading + (r.alphatrak_reading || 0)).reverse();
+  const max = Math.max(...values, 15);
+  const min = Math.min(...values, 0);
+  const range = max - min;
+  
+  const w = canvas.width;
+  const h = canvas.height;
+  const padding = 10;
+  const chartW = w - padding * 2;
+  const chartH = h - padding * 2;
+  
+  // Draw target range (6-12 mmol/L)
+  const targetLow = 6;
+  const targetHigh = 12;
+  const yLow = padding + chartH - ((targetLow - min) / range) * chartH;
+  const yHigh = padding + chartH - ((targetHigh - min) / range) * chartH;
+  ctx.fillStyle = 'rgba(78, 204, 163, 0.1)';
+  ctx.fillRect(padding, yHigh, chartW, yLow - yHigh);
+  
+  // Draw line
+  ctx.strokeStyle = '#4ecca3';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  values.forEach((val, i) => {
+    const x = padding + (i / (values.length - 1)) * chartW;
+    const y = padding + chartH - ((val - min) / range) * chartH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  
+  // Draw points
+  values.forEach((val, i) => {
+    const x = padding + (i / (values.length - 1)) * chartW;
+    const y = padding + chartH - ((val - min) / range) * chartH;
+    ctx.fillStyle = val < 6 ? '#ff9800' : val > 12 ? '#e94560' : '#4ecca3';
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
 }
 
 function fmtDate(dateStr) {

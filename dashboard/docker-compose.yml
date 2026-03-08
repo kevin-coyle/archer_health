@@ -9,3 +9,17 @@ services:
     environment:
       - DB_PATH=/app/data/eyedrops.db
     restart: unless-stopped
+
+  glucose-sync:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - DB_PATH=/app/data/eyedrops.db
+    command: >
+      sh -c "while true; do
+        node /app/scripts/fetch-libre-realtime.js --import;
+        sleep 900;
+      done"
+    restart: unless-stopped
