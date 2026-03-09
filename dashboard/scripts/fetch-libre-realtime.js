@@ -134,7 +134,20 @@ async function getGraphData(token, userId, patientId) {
 }
 
 function convertToCSV(graphData, patientName, offset = 0) {
-  const readings = graphData.graphData || [];
+  let readings = graphData.graphData || [];
+  
+  // Add the latest glucoseMeasurement if it's newer than graphData
+  if (graphData.connection && graphData.connection.glucoseMeasurement) {
+    const latest = graphData.connection.glucoseMeasurement;
+    const latestTimestamp = new Date(latest.Timestamp);
+    const lastGraphTimestamp = readings.length > 0 ? new Date(readings[readings.length - 1].Timestamp) : null;
+    
+    // If glucoseMeasurement is newer, add it
+    if (!lastGraphTimestamp || latestTimestamp > lastGraphTimestamp) {
+      readings = [...readings, latest];
+      console.error(`📍 Added latest reading from glucoseMeasurement: ${latest.Value} mmol/L at ${latest.Timestamp}`);
+    }
+  }
   
   console.error(`📝 Converting ${readings.length} readings to CSV...`);
 
