@@ -93,7 +93,11 @@ enum AppState {
   SESSION_SELECT,
   MEDICATION_DISPLAY,
   TIMER_COUNTDOWN,
-  SESSION_COMPLETE
+  SESSION_COMPLETE,
+  INSULIN_DOSE_SELECT,
+  INSULIN_MEAL_SELECT,
+  INSULIN_CONFIRM,
+  INSULIN_LOGGED
 };
 
 AppState currentState = SESSION_SELECT;
@@ -109,6 +113,10 @@ bool exocinFinished = false;
 bool sessionCompleted[3] = {false, false, false};
 bool lastSyncOk = false;
 
+// Insulin dose state
+float insulinDose = 10.0;
+const char* insulinMeal = "morning";
+
 // Touch regions
 struct TouchRegion {
   int x, y, w, h;
@@ -119,12 +127,22 @@ struct TouchRegion {
 
 TouchRegion btnDone = {45, 170, 150, 40};
 TouchRegion btnSession[3] = {
-  {45, 80, 150, 36},
-  {45, 120, 150, 36},
-  {45, 160, 150, 36}
+  {45, 70, 150, 34},
+  {45, 108, 150, 34},
+  {45, 146, 150, 34}
 };
-TouchRegion btnSettings = {90, 200, 60, 28};
+TouchRegion btnInsulin = {45, 184, 150, 34};
+TouchRegion btnSettings = {100, 222, 40, 18};
 TouchRegion btnSkip = {70, 150, 100, 32};
+
+// Insulin screen touch regions
+TouchRegion btnDoseMinus = {30, 100, 60, 50};
+TouchRegion btnDosePlus = {150, 100, 60, 50};
+TouchRegion btnInsulinNext = {55, 175, 130, 40};
+TouchRegion btnMealMorning = {30, 90, 85, 45};
+TouchRegion btnMealEvening = {125, 90, 85, 45};
+TouchRegion btnInsulinConfirm = {55, 165, 130, 40};
+TouchRegion btnInsulinBack = {75, 200, 90, 28};
 
 // Generate a simple session ID from millis
 String makeSessionId() {
@@ -167,6 +185,33 @@ void postEvent(const char* eventType, const char* medName = nullptr,
     Serial.printf("Event posted: %s (%d)\n", eventType, code);
   } else {
     Serial.printf("Post failed: %s\n", http.errorToString(code).c_str());
+  }
+  http.end();
+}
+
+// POST insulin dose to dashboard
+void postInsulinDose(float units, const char* mealTime) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("postInsulinDose skipped: WiFi not connected");
+    return;
+  }
+
+  HTTPClient http;
+  String url = String("http://") + DASHBOARD_HOST + ":" + String(DASHBOARD_PORT) + "/api/glucose/insulin";
+  http.begin(url);
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  http.addHeader("Content-Type", "application/json");
+
+  String json = "{\"dose_units\":" + String(units, 1) +
+                ",\"meal_time\":\"" + String(mealTime) + "\"" +
+                ",\"notes\":\"logged from ESP32\"}";
+
+  int code = http.POST(json);
+  if (code > 0) {
+    Serial.printf("Insulin dose posted: %.1f IU (%s) -> %d\n", units, mealTime, code);
+  } else {
+    Serial.printf("Insulin post failed: %s\n", http.errorToString(code).c_str());
   }
   http.end();
 }
@@ -316,6 +361,122 @@ void setup()
     Serial.println("Setup complete!");
 }
 
+void drawInsulinDoseSelect() {
+  tft.fillScreen(TFT_BLACK);
+
+  // Title
+  tft.setTextSize(2);
+  tft.setTextDatum(middle_center);
+  tft.setTextColor(TFT_CYAN);
+  tft.drawString("INSULIN DOSE", 120, 45);
+
+  // Minus button
+  tft.fillRoundRect(btnDoseMinus.x, btnDoseMinus.y, btnDoseMinus.w, btnDoseMinus.h, 8, TFT_RED);
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextDatum(middle_center);
+  tft.drawString("-", btnDoseMinus.x + 30, btnDoseMinus.y + 25);
+
+  // Dose value
+  char doseStr[10];
+  snprintf(doseStr, sizeof(doseStr), "%.0f", insulinDose);
+  tft.setTextSize(4);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString(doseStr, 120, 125);
+  tft.setTextSize(2);
+  tft.drawString("IU", 120, 155);
+
+  // Plus button
+  tft.fillRoundRect(btnDosePlus.x, btnDosePlus.y, btnDosePlus.w, btnDosePlus.h, 8, TFT_GREEN);
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_BLACK);
+  tft.drawString("+", btnDosePlus.x + 30, btnDosePlus.y + 25);
+
+  // Next button
+  tft.fillRoundRect(btnInsulinNext.x, btnInsulinNext.y, btnInsulinNext.w, btnInsulinNext.h, 8, TFT_BLUE);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextDatum(middle_center);
+  tft.drawString("NEXT", 120, btnInsulinNext.y + 20);
+
+  // Back label
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY);
+  tft.drawString("tap below to cancel", 120, 222);
+}
+
+void drawInsulinMealSelect() {
+  tft.fillScreen(TFT_BLACK);
+
+  // Title
+  tft.setTextSize(2);
+  tft.setTextDatum(middle_center);
+  tft.setTextColor(TFT_CYAN);
+  tft.drawString("MEAL TIME", 120, 45);
+
+  // Show selected dose
+  char doseStr[16];
+  snprintf(doseStr, sizeof(doseStr), "%.0f IU", insulinDose);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY);
+  tft.drawString(doseStr, 120, 70);
+
+  // Morning button
+  bool isMorning = strcmp(insulinMeal, "morning") == 0;
+  tft.fillRoundRect(btnMealMorning.x, btnMealMorning.y, btnMealMorning.w, btnMealMorning.h, 8,
+                     isMorning ? TFT_ORANGE : TFT_DARKGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(isMorning ? TFT_BLACK : TFT_WHITE);
+  tft.setTextDatum(middle_center);
+  tft.drawString("AM", btnMealMorning.x + 42, btnMealMorning.y + 15);
+  tft.setTextSize(1);
+  tft.drawString("11am", btnMealMorning.x + 42, btnMealMorning.y + 35);
+
+  // Evening button
+  bool isEvening = strcmp(insulinMeal, "evening") == 0;
+  tft.fillRoundRect(btnMealEvening.x, btnMealEvening.y, btnMealEvening.w, btnMealEvening.h, 8,
+                     isEvening ? TFT_PURPLE : TFT_DARKGREY);
+  tft.setTextSize(2);
+  tft.setTextColor(isEvening ? TFT_WHITE : TFT_WHITE);
+  tft.setTextDatum(middle_center);
+  tft.drawString("PM", btnMealEvening.x + 42, btnMealEvening.y + 15);
+  tft.setTextSize(1);
+  tft.drawString("6pm", btnMealEvening.x + 42, btnMealEvening.y + 35);
+
+  // Confirm button
+  tft.fillRoundRect(btnInsulinConfirm.x, btnInsulinConfirm.y, btnInsulinConfirm.w, btnInsulinConfirm.h, 8, TFT_GREEN);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_BLACK);
+  tft.setTextDatum(middle_center);
+  tft.drawString("LOG DOSE", 120, btnInsulinConfirm.y + 20);
+
+  // Back button
+  tft.fillRoundRect(btnInsulinBack.x, btnInsulinBack.y, btnInsulinBack.w, btnInsulinBack.h, 5, TFT_DARKGREY);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString("BACK", 120, btnInsulinBack.y + 14);
+}
+
+void drawInsulinLogged() {
+  tft.fillScreen(TFT_BLACK);
+
+  tft.setTextSize(3);
+  tft.setTextDatum(middle_center);
+  tft.setTextColor(TFT_GREEN);
+  tft.drawString("LOGGED!", 120, 80);
+
+  char doseStr[20];
+  snprintf(doseStr, sizeof(doseStr), "%.0f IU", insulinDose);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString(doseStr, 120, 120);
+  tft.drawString(strcmp(insulinMeal, "morning") == 0 ? "Morning" : "Evening", 120, 148);
+
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY);
+  tft.drawString("Tap to return", 120, 190);
+}
+
 void drawSessionSelect() {
   fetchCompletedSessions();
 
@@ -346,11 +507,19 @@ void drawSessionSelect() {
     }
   }
 
-  // Draw settings button (bottom center, within circular safe area)
+  // Insulin dose button
+  tft.fillRoundRect(btnInsulin.x, btnInsulin.y, btnInsulin.w, btnInsulin.h, 8, TFT_CYAN);
+  tft.setTextSize(2);
+  tft.setTextDatum(middle_center);
+  tft.setTextColor(TFT_BLACK);
+  tft.drawString("INSULIN", 120, btnInsulin.y + 17);
+  tft.setTextColor(TFT_WHITE);
+
+  // Draw settings button (small, bottom)
   tft.fillRoundRect(btnSettings.x, btnSettings.y, btnSettings.w, btnSettings.h, 5, TFT_BLUE);
   tft.setTextSize(1);
   tft.setTextDatum(middle_center);
-  tft.drawString("SET", 120, btnSettings.y + 14);
+  tft.drawString("SET", 120, btnSettings.y + 9);
 
   // Sync status indicator
   if (!lastSyncOk) {
@@ -599,6 +768,13 @@ void handleTouch(int x, int y) {
           return;
         }
       }
+      // Check insulin button
+      if (btnInsulin.contains(x, y)) {
+        insulinDose = 10.0;  // Default
+        insulinMeal = "morning";
+        currentState = INSULIN_DOSE_SELECT;
+        return;
+      }
       // Check settings button
       if (btnSettings.contains(x, y)) {
         drawSettingsMenu();
@@ -667,6 +843,45 @@ void handleTouch(int x, int y) {
       // Tap anywhere to return to session select
       currentState = SESSION_SELECT;
       break;
+
+    case INSULIN_DOSE_SELECT:
+      if (btnDoseMinus.contains(x, y)) {
+        if (insulinDose > 1) {
+          insulinDose -= 1;
+          drawInsulinDoseSelect();
+        }
+      } else if (btnDosePlus.contains(x, y)) {
+        if (insulinDose < 50) {
+          insulinDose += 1;
+          drawInsulinDoseSelect();
+        }
+      } else if (btnInsulinNext.contains(x, y)) {
+        currentState = INSULIN_MEAL_SELECT;
+      } else if (y > 210) {
+        // Cancel - back to session select
+        currentState = SESSION_SELECT;
+      }
+      break;
+
+    case INSULIN_MEAL_SELECT:
+      if (btnMealMorning.contains(x, y)) {
+        insulinMeal = "morning";
+        drawInsulinMealSelect();
+      } else if (btnMealEvening.contains(x, y)) {
+        insulinMeal = "evening";
+        drawInsulinMealSelect();
+      } else if (btnInsulinConfirm.contains(x, y)) {
+        postInsulinDose(insulinDose, insulinMeal);
+        currentState = INSULIN_LOGGED;
+      } else if (btnInsulinBack.contains(x, y)) {
+        currentState = INSULIN_DOSE_SELECT;
+      }
+      break;
+
+    case INSULIN_LOGGED:
+      // Tap anywhere to return
+      currentState = SESSION_SELECT;
+      break;
   }
 }
 
@@ -688,6 +903,17 @@ void loop()
         break;
       case SESSION_COMPLETE:
         drawComplete();
+        break;
+      case INSULIN_DOSE_SELECT:
+        drawInsulinDoseSelect();
+        break;
+      case INSULIN_MEAL_SELECT:
+        drawInsulinMealSelect();
+        break;
+      case INSULIN_CONFIRM:
+        break;
+      case INSULIN_LOGGED:
+        drawInsulinLogged();
         break;
     }
     lastState = currentState;
