@@ -4,3 +4,6 @@ dashboard/eyedrops.db
 dashboard/eyedrops.db-shm
 dashboard/eyedrops.db-wal
 dashboard/package-lock.json
+dashboard/data/*.db
+dashboard/data/*.db-shm
+dashboard/data/*.db-wal
