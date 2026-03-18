@@ -20,6 +20,14 @@ if (fs.existsSync(glucoseMigrationPath)) {
   db.exec(migration);
 }
 
+// Run urinalysis table migration if it exists
+const urinalysisMigrationPath = path.join(__dirname, 'migrations/add-urinalysis-table.sql');
+if (fs.existsSync(urinalysisMigrationPath)) {
+  console.log('Running urinalysis table migration...');
+  const migration = fs.readFileSync(urinalysisMigrationPath, 'utf-8');
+  db.exec(migration);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +48,10 @@ app.use(express.json());
 // Mount glucose monitoring routes
 const glucoseRoutes = require('./routes/glucose');
 app.use('/api/glucose', glucoseRoutes(db));
+
+// Mount urinalysis routes
+const urinalysisRoutes = require('./routes/urinalysis');
+app.use('/api/urinalysis', urinalysisRoutes(db));
 
 // POST /api/events - ESP32 posts events here
 const insertStmt = db.prepare(`
