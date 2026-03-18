@@ -20,6 +20,14 @@ if (fs.existsSync(glucoseMigrationPath)) {
   db.exec(migration);
 }
 
+// Run health tables migration if it exists
+const healthMigrationPath = path.join(__dirname, 'migrations/add-health-tables.sql');
+if (fs.existsSync(healthMigrationPath)) {
+  console.log('Running health tables migration...');
+  const migration = fs.readFileSync(healthMigrationPath, 'utf-8');
+  db.exec(migration);
+}
+
 // Run urinalysis table migration if it exists
 const urinalysisMigrationPath = path.join(__dirname, 'migrations/add-urinalysis-table.sql');
 if (fs.existsSync(urinalysisMigrationPath)) {
@@ -52,6 +60,10 @@ app.use('/api/glucose', glucoseRoutes(db));
 // Mount urinalysis routes
 const urinalysisRoutes = require('./routes/urinalysis');
 app.use('/api/urinalysis', urinalysisRoutes(db));
+
+// Mount health export routes (Apple Health Auto Export)
+const healthExportRoutes = require('./routes/health-export');
+app.use('/api/health', healthExportRoutes(db));
 
 // POST /api/events - ESP32 posts events here
 const insertStmt = db.prepare(`
